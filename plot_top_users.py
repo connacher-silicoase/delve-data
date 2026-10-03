@@ -1,19 +1,18 @@
 """Stacked bar chart of the top delve.town users by total post count, labeled with avatars.
 
-Reads posts.csv and avatars/ (both written by fetch_posts.py).
+Usage: plot_top_users.py [snapshot dir] [n]  (defaults: newest under data/, 10)
 """
 
 import sys
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 from PIL import Image
 
+from snapshots import resolve_snapshot
 from theme import FIGSIZE, REPLIES_COLOR, TOP_LEVEL_COLOR, save_figure, set_theme, style_axes
 
-AVATAR_DIR = Path("avatars")
 AVATAR_PX = 128  # source resolution; displayed at AVATAR_PX * AVATAR_ZOOM points
 AVATAR_ZOOM = 0.24
 HANDLE_FONTSIZE = 9
@@ -25,8 +24,8 @@ HANDLE_PAD = AVATAR_GAP + AVATAR_PT + 4
 PCT_OFFSET = HANDLE_PAD + 16
 
 
-def load_avatar(handle):
-    path = next(AVATAR_DIR.glob(f"{handle}.*"), None)
+def load_avatar(avatar_dir, handle):
+    path = next(avatar_dir.glob(f"{handle}.*"), None)
     if path is None:
         return None
     img = Image.open(path).convert("RGB")
@@ -35,7 +34,9 @@ def load_avatar(handle):
     return img.crop((left, top, left + side, top + side)).resize((AVATAR_PX, AVATAR_PX))
 
 
-def main(in_path="posts.csv", out_path="top_users.png", n="10"):
+def main(snapshot=None, n="10"):
+    snapshot = resolve_snapshot(snapshot)
+    in_path = snapshot / "posts.csv"
     set_theme()
     n = int(n)
     df = pd.read_csv(in_path)
@@ -60,7 +61,7 @@ def main(in_path="posts.csv", out_path="top_users.png", n="10"):
     ax.set_xticks(x, [h.removesuffix(".delve.town") for h in counts.index])
     ax.tick_params(axis="x", length=0, pad=HANDLE_PAD, labelsize=HANDLE_FONTSIZE)
     for i, (handle, row) in enumerate(counts.iterrows()):
-        avatar = load_avatar(handle)
+        avatar = load_avatar(snapshot / "avatars", handle)
         if avatar is not None:
             ax.add_artist(AnnotationBbox(
                 OffsetImage(avatar, zoom=AVATAR_ZOOM),
@@ -90,7 +91,7 @@ def main(in_path="posts.csv", out_path="top_users.png", n="10"):
         va="top",
     )
 
-    save_figure(fig, in_path, out_path)
+    save_figure(fig, in_path, snapshot / "top_users.png")
 
 
 if __name__ == "__main__":
