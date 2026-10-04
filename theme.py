@@ -28,15 +28,20 @@ def style_axes(ax):
     sns.despine(ax=ax, left=True, bottom=True)
 
 
-def save_figure(fig, data_path, out_path):
-    """Lay out the figure, add a "Source:" line with the access time, and save it."""
+def add_source_footer(fig, data_path):
+    """Add the shared source line using the data file's access time."""
     meta = json.loads(Path(data_path).with_suffix(".meta.json").read_text())
     accessed_at = datetime.fromisoformat(meta["accessed_at"])
-    fig.tight_layout(rect=(0, 0.04, 1, 1))
     fig.text(
         0.01, 0.01,
         f"Source: delve.town, accessed {accessed_at:%b %-d, %Y %H:%M} UTC",
         ha="left", va="bottom", fontsize=9, color="0.4",
     )
+
+
+def save_figure(fig, data_path, out_path):
+    """Lay out the figure, add a "Source:" line with the access time, and save it."""
+    fig.tight_layout(rect=(0, 0.04, 1, 1))
+    add_source_footer(fig, data_path)
     fig.savefig(out_path, dpi=DPI)
     print(f"wrote {out_path}")
