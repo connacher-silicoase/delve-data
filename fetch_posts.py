@@ -1,6 +1,7 @@
 """Download every post and avatar on the delve.town PDS into a new snapshot folder.
 
-Writes data/<timestamp>/posts.csv, posts.meta.json (with the access time) and avatars/.
+Writes posts.csv, posts.meta.json, users.csv, interactions.csv and avatars/
+inside data/<timestamp>/.
 
 delve.town is an AT Protocol fork. Its PDS exposes public XRPC endpoints:
   - com.atproto.sync.listRepos   -> every account (DID) hosted on the PDS
@@ -16,8 +17,10 @@ import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 
 from snapshots import new_snapshot
+from network import post_interactions, like_interaction
 
 PDS = "https://pds.delve.town"
 COLLECTION = "town.delve.feed.post"
@@ -63,16 +66,24 @@ def main():
     avatar_dir = snapshot / "avatars"
     avatar_dir.mkdir()
     repos = list(paginate("com.atproto.sync.listRepos", "repos"))
+    inactive = [repo["did"] for repo in repos if not repo.get("active", True)]
+    repos = [repo for repo in repos if repo.get("active", True)]
     print(f"{len(repos)} accounts", file=sys.stderr)
+    if inactive:
+        print(f"Skipping {len(inactive)} inactive accounts", file=sys.stderr)
 
     rows = []
-    for repo in repos:
+    interactions = []
+    users = []
+    def fetch_repo(repo):
+        rows, interactions = [], []
         did = repo["did"]
         handle = xrpc("com.atproto.repo.describeRepo", repo=did).get("handle", "")
         fetch_avatar(did, handle or did, avatar_dir)
         n = 0
         for rec in paginate("com.atproto.repo.listRecords", "records", repo=did, collection=COLLECTION):
             v = rec["value"]
+            interactions.extend(post_interactions(did, rec))
             rows.append({
                 "uri": rec["uri"],
                 "did": did,
@@ -82,7 +93,19 @@ def main():
                 "text": v.get("text", ""),
             })
             n += 1
+        for rec in paginate("com.atproto.repo.listRecords", "records", repo=did, collection="town.delve.feed.like"):
+            interaction = like_interaction(did, rec)
+            if interaction:
+                interactions.append(interaction)
         print(f"  {handle or did}: {n}", file=sys.stderr)
+
+        return {"did": did, "handle": handle}, rows, interactions
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for user, posts, events in pool.map(fetch_repo, repos):
+            users.append(user)
+            rows.extend(posts)
+            interactions.extend(events)
 
     rows.sort(key=lambda r: r["created_at"])
     out_path = snapshot / "posts.csv"
@@ -90,7 +113,17 @@ def main():
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()) if rows else ["uri"])
         writer.writeheader()
         writer.writerows(rows)
-    (snapshot / "posts.meta.json").write_text(json.dumps({"accessed_at": accessed_at.isoformat()}) + "\n")
+    for name, data, fields in [
+        ("users", users, ["did", "handle"]),
+        ("interactions", interactions, ["uri", "source", "target", "kind", "subject_uri", "created_at"]),
+    ]:
+        with (snapshot / f"{name}.csv").open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(data)
+    (snapshot / "posts.meta.json").write_text(json.dumps({
+        "accessed_at": accessed_at.isoformat(), "inactive_accounts": inactive,
+    }) + "\n")
     print(f"wrote {len(rows)} posts to {out_path}", file=sys.stderr)
 
 

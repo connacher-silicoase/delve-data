@@ -5,39 +5,17 @@ Usage: plot_top_users.py [snapshot dir] [n]  (defaults: newest under data/, 10)
 
 import sys
 
-import matplotlib.pyplot as plt
 import pandas as pd
-from matplotlib.offsetbox import AnnotationBbox, OffsetImage
-from PIL import Image
 
 from snapshots import resolve_snapshot
-from theme import FIGSIZE, REPLIES_COLOR, TOP_LEVEL_COLOR, save_figure, set_theme, style_axes
-
-AVATAR_PX = 128  # source resolution; displayed at AVATAR_PX * AVATAR_ZOOM points
-AVATAR_ZOOM = 0.24
-HANDLE_FONTSIZE = 9
-AVATAR_PT = AVATAR_PX * AVATAR_ZOOM
-
-# Rows below the x-axis, in points: avatar, then handle (tick label), then % replies.
-AVATAR_GAP = 4
-HANDLE_PAD = AVATAR_GAP + AVATAR_PT + 4
-PCT_OFFSET = HANDLE_PAD + 16
-
-
-def load_avatar(avatar_dir, handle):
-    path = next(avatar_dir.glob(f"{handle}.*"), None)
-    if path is None:
-        return None
-    img = Image.open(path).convert("RGB")
-    side = min(img.size)
-    left, top = (img.width - side) // 2, (img.height - side) // 2
-    return img.crop((left, top, left + side, top + side)).resize((AVATAR_PX, AVATAR_PX))
+from theme import REPLIES_COLOR, TOP_LEVEL_COLOR, style_axes, format_count
+from chart_layout import Chart, measure, place_box
+from avatars import poster_box
 
 
 def main(snapshot=None, n="10"):
     snapshot = resolve_snapshot(snapshot)
     in_path = snapshot / "posts.csv"
-    set_theme()
     n = int(n)
     df = pd.read_csv(in_path)
     counts = (
@@ -47,51 +25,28 @@ def main(snapshot=None, n="10"):
     )
     counts["top_level"] = counts["total"] - counts["replies"]
 
-    fig, ax = plt.subplots(figsize=FIGSIZE)
+    chart = Chart('Top Delvetown Posters', in_path)
+    identities = [poster_box(snapshot / 'avatars', handle, row['replies'] / row['total'])
+                  for handle, row in counts.iterrows()]
+    label_height = max(measure(chart.fig, box)[1] for box in identities)
+    grid = chart.body.subgridspec(2, 1, height_ratios=[chart.body_height - label_height, label_height], hspace=0)
+    ax = chart.fig.add_subplot(grid[0])
+    labels = chart.fig.add_subplot(grid[1], sharex=ax)
+    labels.set_axis_off()
     x = range(len(counts))
     ax.bar(x, counts["top_level"], label="Top-level posts", color=TOP_LEVEL_COLOR)
     replies = ax.bar(x, counts["replies"], bottom=counts["top_level"], label="Replies", color=REPLIES_COLOR)
-    ax.bar_label(replies, labels=[f"{t:,}" for t in counts["total"]])
-    ax.set_title("Top Delvetown Posters")
+    ax.bar_label(replies, labels=[format_count(t) for t in counts["total"]])
     ax.set_ylabel("Posts")
     ax.legend()
     style_axes(ax)
 
-    # Avatar row, then handles as tick labels, then a % replies row.
-    ax.set_xticks(x, [h.removesuffix(".delve.town") for h in counts.index])
-    ax.tick_params(axis="x", length=0, pad=HANDLE_PAD, labelsize=HANDLE_FONTSIZE)
-    for i, (handle, row) in enumerate(counts.iterrows()):
-        avatar = load_avatar(snapshot / "avatars", handle)
-        if avatar is not None:
-            ax.add_artist(AnnotationBbox(
-                OffsetImage(avatar, zoom=AVATAR_ZOOM),
-                (i, 0),
-                xycoords=("data", "axes fraction"),
-                xybox=(0, -AVATAR_GAP),
-                boxcoords="offset points",
-                box_alignment=(0.5, 1),
-                frameon=False,
-            ))
-        ax.annotate(
-            f"{row['replies'] / row['total']:.0%}",
-            (i, 0),
-            xycoords=("data", "axes fraction"),
-            xytext=(0, -PCT_OFFSET),
-            textcoords="offset points",
-            ha="center",
-            va="top",
-        )
-    ax.annotate(
-        "% replies",
-        (0, 0),
-        xycoords="axes fraction",
-        xytext=(-8, -PCT_OFFSET),
-        textcoords="offset points",
-        ha="right",
-        va="top",
-    )
+    ax.set_xticks(x)
+    ax.tick_params(axis='x', bottom=False, labelbottom=False)
+    for i, box in enumerate(identities):
+        place_box(labels, box, (i, 1), coordinates=labels.get_xaxis_transform(), alignment=(0.5, 1))
+    chart.save(snapshot / 'top_users.png')
 
-    save_figure(fig, in_path, snapshot / "top_users.png")
 
 
 if __name__ == "__main__":
